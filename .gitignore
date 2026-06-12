@@ -1,0 +1,26 @@
+# Compiled Java Class files
+*.class
+
+# Log files
+*.log
+
+# Blueprints and binaries
+*.jar
+*.war
+
+# Dependency directories
+node_modules/
+.gradle/
+build/
+target/
+bin/
+
+# IDE configurations
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Local environment variables
+.env
+.env.local

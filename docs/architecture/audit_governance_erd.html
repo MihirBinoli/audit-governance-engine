@@ -1,0 +1,122 @@
+<style>
+#erd svg { width: 100% !important; }
+</style>
+<div id="erd" style="padding: 8px 0;"></div>
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"Anthropic Sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '13px',
+    fontFamily: '"Anthropic Sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+    primaryColor: dark ? '#3C3489' : '#EEEDFE',
+    primaryTextColor: dark ? '#CECBF6' : '#26215C',
+    primaryBorderColor: dark ? '#7F77DD' : '#534AB7',
+    edgeLabelBackground: dark ? '#2C2C2A' : '#F1EFE8',
+  },
+});
+const diagram = `erDiagram
+  users {
+    uuid id PK
+    string username
+    string email
+    string password_hash
+    string full_name
+    boolean is_active
+    timestamp created_at
+    timestamp updated_at
+  }
+  roles {
+    uuid id PK
+    string name
+    string description
+    int tier_level
+  }
+  user_roles {
+    uuid user_id FK
+    uuid role_id FK
+    timestamp assigned_at
+  }
+  audit_submissions {
+    uuid id PK
+    string title
+    string document_category
+    text description
+    string file_path
+    string status
+    uuid submitted_by FK
+    uuid current_assignee FK
+    int current_tier
+    timestamp submitted_at
+    timestamp last_updated_at
+  }
+  approval_actions {
+    uuid id PK
+    uuid submission_id FK
+    uuid actor_id FK
+    string action
+    int tier_at_action
+    text comments
+    timestamp acted_at
+  }
+  sla_configs {
+    uuid id PK
+    string document_category
+    int tier_level
+    int sla_hours
+    uuid escalation_to FK
+    boolean is_active
+  }
+  sla_tracking {
+    uuid id PK
+    uuid submission_id FK
+    int tier_level
+    timestamp tier_started_at
+    timestamp sla_deadline
+    boolean is_escalated
+    timestamp escalated_at
+    int escalation_count
+  }
+  users ||--o{ user_roles : has
+  roles ||--o{ user_roles : assigned_to
+  users ||--o{ audit_submissions : submits
+  users ||--o{ audit_submissions : assigned_to
+  audit_submissions ||--o{ approval_actions : has
+  users ||--o{ approval_actions : performs
+  audit_submissions ||--o{ sla_tracking : tracked_by
+  sla_configs ||--o{ sla_tracking : governs
+`;
+const { svg } = await mermaid.render('erd-svg', diagram);
+document.getElementById('erd').innerHTML = svg;
+
+document.querySelectorAll('#erd svg .node').forEach(node => {
+  const firstPath = node.querySelector('path[d]');
+  if (!firstPath) return;
+  const d = firstPath.getAttribute('d');
+  const nums = d.match(/-?[\d.]+/g)?.map(Number);
+  if (!nums || nums.length < 8) return;
+  const xs = [nums[0], nums[2], nums[4], nums[6]];
+  const ys = [nums[1], nums[3], nums[5], nums[7]];
+  const x = Math.min(...xs), y = Math.min(...ys);
+  const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', x); rect.setAttribute('y', y);
+  rect.setAttribute('width', w); rect.setAttribute('height', h);
+  rect.setAttribute('rx', '8');
+  for (const a of ['fill', 'stroke', 'stroke-width', 'class', 'style']) {
+    if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+  }
+  firstPath.replaceWith(rect);
+});
+
+document.querySelectorAll('#erd svg .row-rect-odd path, #erd svg .row-rect-even path').forEach(p => {
+  p.setAttribute('stroke', 'none');
+});
+</script>
