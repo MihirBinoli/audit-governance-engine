@@ -24,3 +24,7 @@ bin/
 # Local environment variables
 .env
 .env.local
+.env
+
+# Environment secrets — never commit
+.env
