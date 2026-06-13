@@ -1,0 +1,758 @@
+openapi: 3.0.3
+
+info:
+  title: Enterprise Audit & Governance Workflow Engine API
+  description: |
+    REST API for the AGE platform. Handles authentication, audit document submissions,
+    multi-tier approval workflows, and SLA configuration.
+    
+    **Authentication:** All endpoints except `/api/auth/**` require a Bearer JWT token
+    in the `Authorization` header.
+    
+    **WebSocket:** Real-time escalation alerts are delivered via STOMP over SockJS
+    at `ws://host/ws`. Subscribe to `/topic/escalations` after connecting.
+  version: 1.0.0
+  contact:
+    name: AGE Platform Team
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Auth
+    description: Login and token refresh
+  - name: Submissions
+    description: Create and manage audit submissions
+  - name: Approvals
+    description: Process approval actions on submissions
+  - name: Admin
+    description: SLA configuration and dashboard data (ADMIN role only)
+
+# ─────────────────────────────────────────────────────────────
+# SECURITY SCHEME
+# ─────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  # ─── REUSABLE SCHEMAS ───────────────────────────────────────
+  schemas:
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: john.maker
+        password:
+          type: string
+          format: password
+          example: secret123
+
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: JWT access token (expires in 15 minutes)
+        refreshToken:
+          type: string
+          description: Opaque refresh token (expires in 7 days)
+        tokenType:
+          type: string
+          example: Bearer
+        expiresIn:
+          type: integer
+          description: Access token lifetime in seconds
+          example: 900
+
+    CreateSubmissionRequest:
+      type: object
+      required: [title, documentCategory, description]
+      properties:
+        title:
+          type: string
+          maxLength: 255
+          example: Q3 2025 Vendor Compliance Audit
+        documentCategory:
+          type: string
+          enum: [VENDOR_COMPLIANCE, FINANCIAL_AUDIT, DATA_PRIVACY, OPERATIONAL_RISK]
+          example: VENDOR_COMPLIANCE
+        description:
+          type: string
+          maxLength: 2000
+          example: Annual review of vendor data handling practices per ISO 27001.
+        filePath:
+          type: string
+          description: Path to the uploaded document (upload handled separately)
+          example: uploads/2025/q3-vendor-audit.pdf
+
+    SubmissionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        documentCategory:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [DRAFT, PENDING_L1, PENDING_L2, PENDING_ADMIN, APPROVED, REJECTED, REVISION_REQUESTED]
+        currentTier:
+          type: integer
+          example: 1
+        submittedBy:
+          $ref: '#/components/schemas/UserSummary'
+        currentAssignee:
+          $ref: '#/components/schemas/UserSummary'
+        submittedAt:
+          type: string
+          format: date-time
+        lastUpdatedAt:
+          type: string
+          format: date-time
+
+    SubmissionListResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubmissionResponse'
+        totalElements:
+          type: integer
+        totalPages:
+          type: integer
+        currentPage:
+          type: integer
+        pageSize:
+          type: integer
+
+    ProcessApprovalRequest:
+      type: object
+      required: [action, comments]
+      properties:
+        action:
+          type: string
+          enum: [APPROVE, REJECT, REQUEST_REVISION]
+          example: APPROVE
+        comments:
+          type: string
+          minLength: 10
+          maxLength: 1000
+          description: Mandatory comments for all approval actions
+          example: All vendor documentation is in order. Approved for L2 review.
+
+    ApprovalHistoryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        actor:
+          $ref: '#/components/schemas/UserSummary'
+        action:
+          type: string
+          enum: [APPROVE, REJECT, REQUEST_REVISION, ESCALATE]
+        tierAtAction:
+          type: integer
+        comments:
+          type: string
+        actedAt:
+          type: string
+          format: date-time
+
+    SlaConfigRequest:
+      type: object
+      required: [documentCategory, tierLevel, slaHours]
+      properties:
+        documentCategory:
+          type: string
+          enum: [VENDOR_COMPLIANCE, FINANCIAL_AUDIT, DATA_PRIVACY, OPERATIONAL_RISK]
+        tierLevel:
+          type: integer
+          minimum: 1
+          maximum: 3
+          example: 1
+        slaHours:
+          type: integer
+          minimum: 1
+          maximum: 720
+          description: Number of hours before escalation triggers
+          example: 24
+        escalationToUserId:
+          type: string
+          format: uuid
+          description: User to notify on escalation (typically a manager)
+
+    SlaConfigResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        documentCategory:
+          type: string
+        tierLevel:
+          type: integer
+        slaHours:
+          type: integer
+        escalationTo:
+          $ref: '#/components/schemas/UserSummary'
+        isActive:
+          type: boolean
+
+    AdminDashboardResponse:
+      type: object
+      properties:
+        totalSubmissions:
+          type: integer
+        pendingSubmissions:
+          type: integer
+        escalatedToday:
+          type: integer
+        approvedThisMonth:
+          type: integer
+        overdueSubmissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubmissionResponse'
+        recentEscalations:
+          type: array
+          items:
+            $ref: '#/components/schemas/EscalationEventResponse'
+
+    EscalationEventResponse:
+      type: object
+      properties:
+        submissionId:
+          type: string
+          format: uuid
+        submissionTitle:
+          type: string
+        tier:
+          type: integer
+        assignee:
+          $ref: '#/components/schemas/UserSummary'
+        slaDeadline:
+          type: string
+          format: date-time
+        escalatedAt:
+          type: string
+          format: date-time
+
+    UserSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        username:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+  # ─── REUSABLE RESPONSES ─────────────────────────────────────
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Authenticated but insufficient role for this action
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BadRequest:
+      description: Validation error on request body
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+security:
+  - BearerAuth: []
+
+# ─────────────────────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────────────────────
+paths:
+
+  # ── AUTH ────────────────────────────────────────────────────
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate and receive JWT tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Exchange a refresh token for a new access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: New access token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Invalidate the current refresh token
+      responses:
+        '204':
+          description: Logged out successfully
+
+  # ── SUBMISSIONS ─────────────────────────────────────────────
+
+  /api/submissions:
+    get:
+      tags: [Submissions]
+      summary: List submissions visible to the current user
+      description: |
+        - MAKER sees only their own submissions
+        - CHECKER_L1 sees all PENDING_L1 submissions
+        - CHECKER_L2 sees all PENDING_L2 submissions
+        - ADMIN sees all submissions
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [DRAFT, PENDING_L1, PENDING_L2, PENDING_ADMIN, APPROVED, REJECTED, REVISION_REQUESTED]
+        - name: documentCategory
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: sort
+          in: query
+          schema:
+            type: string
+            example: submittedAt,desc
+      responses:
+        '200':
+          description: Paginated list of submissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [Submissions]
+      summary: Create a new audit submission
+      description: Available to MAKER role only. Submission starts in PENDING_L1 status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubmissionRequest'
+      responses:
+        '201':
+          description: Submission created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/submissions/{id}:
+    get:
+      tags: [Submissions]
+      summary: Get a single submission by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Submission detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/submissions/{id}/history:
+    get:
+      tags: [Submissions]
+      summary: Get the full approval action history for a submission
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chronological list of approval actions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApprovalHistoryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ── APPROVALS ───────────────────────────────────────────────
+
+  /api/submissions/{id}/approve:
+    patch:
+      tags: [Approvals]
+      summary: Approve a submission at the current tier
+      description: |
+        Advances the submission to the next tier or to APPROVED if at final tier.
+        The actor must hold the role matching the submission's current tier.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessApprovalRequest'
+      responses:
+        '200':
+          description: Submission approved and advanced
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/submissions/{id}/reject:
+    patch:
+      tags: [Approvals]
+      summary: Reject a submission at the current tier
+      description: Moves submission to REJECTED status. Maker cannot resubmit a rejected submission.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessApprovalRequest'
+      responses:
+        '200':
+          description: Submission rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/submissions/{id}/request-revision:
+    patch:
+      tags: [Approvals]
+      summary: Request revision from the Maker
+      description: |
+        Moves submission to REVISION_REQUESTED. The Maker can then resubmit.
+        Resubmission restarts the approval chain from tier 1.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessApprovalRequest'
+      responses:
+        '200':
+          description: Revision requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/submissions/{id}/resubmit:
+    patch:
+      tags: [Approvals]
+      summary: Resubmit a submission after revision
+      description: Only available when submission status is REVISION_REQUESTED. Restarts from tier 1.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+                  description: Optional updated description
+                filePath:
+                  type: string
+                  description: Optional updated file path
+      responses:
+        '200':
+          description: Resubmitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ── ADMIN ────────────────────────────────────────────────────
+
+  /api/admin/dashboard:
+    get:
+      tags: [Admin]
+      summary: Get admin dashboard summary
+      description: Returns aggregate stats and recent escalation events. ADMIN role required.
+      responses:
+        '200':
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDashboardResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/sla-configs:
+    get:
+      tags: [Admin]
+      summary: List all SLA configurations
+      responses:
+        '200':
+          description: List of SLA configs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SlaConfigResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags: [Admin]
+      summary: Create or update an SLA configuration
+      description: If a config for (documentCategory + tierLevel) already exists, it is replaced.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SlaConfigRequest'
+      responses:
+        '201':
+          description: SLA config saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlaConfigResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/sla-configs/{id}:
+    delete:
+      tags: [Admin]
+      summary: Deactivate an SLA configuration
+      description: Soft-deletes (sets is_active=false). Does not affect in-flight SLA tracking records.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: SLA config deactivated
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/escalations:
+    get:
+      tags: [Admin]
+      summary: List recent escalation events
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Paginated escalation events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EscalationEventResponse'
+                  totalElements:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
